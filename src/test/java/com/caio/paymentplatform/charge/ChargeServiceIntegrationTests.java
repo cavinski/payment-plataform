@@ -3,6 +3,7 @@ package com.caio.paymentplatform.charge;
 import com.caio.paymentplatform.charge.dto.ChargeResponse;
 import com.caio.paymentplatform.charge.dto.CreateChargeRequest;
 import com.caio.paymentplatform.charge.exceptions.ChargeNotFoundException;
+import com.caio.paymentplatform.charge.exceptions.ChargeStateTransitionException;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -90,5 +91,89 @@ class ChargeServiceIntegrationTests {
 
         assertThrows(ChargeNotFoundException.class, 
             () -> chargeService.findById(unknownId));
+    }
+
+    @Test
+    void shouldPersistPaidStatus() {
+
+        ChargeResponse created = chargeService.create(
+            new CreateChargeRequest(
+                new BigDecimal("149.90"),
+                "Charge to pay"
+            )
+        );
+
+        ChargeResponse paid = chargeService.markAsPaid(created.id());
+        ChargeResponse retrieved = chargeService.findById(created.id());
+
+        assertEquals(ChargeStatus.PAID, paid.status());
+        assertEquals(ChargeStatus.PAID, retrieved.status());
+    }
+
+    @Test
+    void shouldPersistCancelledStatus() {
+
+        ChargeResponse created = chargeService.create(
+            new CreateChargeRequest(
+                new BigDecimal("149.90"),
+                "Charge to cancel"
+            )
+        );
+
+        chargeService.cancel(created.id());
+
+        ChargeResponse retrieved = chargeService.findById(created.id());
+
+        assertEquals(ChargeStatus.CANCELLED, retrieved.status());
+    }
+
+    @Test
+    void shouldPersistExpiredStatus() {
+
+        ChargeResponse created = chargeService.create(
+            new CreateChargeRequest(
+                new BigDecimal("149.90"),
+                "Charge to expire"
+            )
+        );
+
+        chargeService.expire(created.id());
+
+        ChargeResponse retrieved = chargeService.findById(created.id());
+
+        assertEquals(ChargeStatus.EXPIRED, retrieved.status());
+    }
+
+    @Test
+    void shouldNotChangePersistedStatusWhenTransitionIsInvalid() {
+
+        ChargeResponse created = chargeService.create(
+            new CreateChargeRequest(
+                new BigDecimal("149.90"),
+                "Charge with invalid transition"
+            )
+        );
+
+        chargeService.markAsPaid(created.id());
+
+        assertThrows(
+            ChargeStateTransitionException.class,
+            () -> chargeService.cancel(created.id())
+        );
+
+        ChargeResponse retrieved = chargeService.findById(created.id());
+
+        assertEquals(ChargeStatus.PAID, retrieved.status());
+    }
+
+    @Test
+    void shouldThrowWhenTryingToTransitionNonexistentCharge() {
+        
+        UUID unknownId = UUID.randomUUID();
+
+        assertThrows(
+            ChargeNotFoundException.class,
+            () -> chargeService.markAsPaid(unknownId)
+        );
     }
 }

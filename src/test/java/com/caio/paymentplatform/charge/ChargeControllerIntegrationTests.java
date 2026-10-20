@@ -5,9 +5,17 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
+import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.shaded.com.fasterxml.jackson.databind.json.JsonMapper;
+import java.math.BigDecimal;
+import java.util.UUID;
+import com.caio.paymentplatform.charge.dto.ChargeResponse;
+import com.caio.paymentplatform.charge.dto.CreateChargeRequest;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.containers.PostgreSQLContainer;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -15,6 +23,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+@Testcontainers 
 @SpringBootTest 
 @AutoConfigureMockMvc 
 class ChargeControllerIntegrationTests {
@@ -24,6 +33,13 @@ class ChargeControllerIntegrationTests {
 
     @Autowired 
     private ChargeRepository chargeRepository;
+
+    @Autowired
+    private ChargeService chargeService;
+
+    @Container
+    @ServiceConnection
+    static final PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:17");
 
     @BeforeEach 
     void cleanDatabase() {
@@ -153,5 +169,95 @@ class ChargeControllerIntegrationTests {
             .contentType(MediaType.APPLICATION_JSON)
             .content(request))
             .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void shouldPayChargeAndReturnUpdatedStatus() throws Exception {
+
+        ChargeResponse created = chargeService.create(
+            new CreateChargeRequest(
+                new BigDecimal("149.90"),
+                "Charge to pay through API"
+            )
+        );
+
+        mockMvc.perform(post("/api/v1/charges/{id}/pay", created.id()))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.id").value(created.id().toString()))
+            .andExpect(jsonPath("$.status").value("PAID"));
+
+        mockMvc.perform(get("/api/v1/charges/{id}", created.id()))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.status").value("PAID"));
+    }
+
+    @Test
+    void shouldReturnConflictWhenCancellingPaidCharge() throws Exception {
+
+        ChargeResponse created = chargeService.create(
+            new CreateChargeRequest(
+                new BigDecimal("149.90"),
+                "Already paid charge"
+            )
+        );
+
+        chargeService.markAsPaid(created.id());
+
+        mockMvc.perform(post("/api/v1/charges/{id}/cancel", created.id()))
+            .andExpect(status().isConflict())
+            .andExpect(jsonPath("$.code")
+            .value("INVALID_CHARGE_STATE_TRANSITION"));
+
+        mockMvc.perform(get("/api/v1/charges/{id}", created.id()))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.status").value("PAID"));
+    }
+
+    @Test
+    void shouldReturnNotFoundWhenPayingNonexistentCharge() throws Exception {
+        
+        UUID unknownId = UUID.randomUUID();
+
+        mockMvc.perform(post("/api/v1/charges/{id}/pay", unknownId))
+            .andExpect(status().isNotFound())
+            .andExpect(jsonPath("$.code").value("CHARGE_NOT_FOUND"));
+    }
+
+    @Test
+    void shouldCancelPendingChargeThroughApi() throws Exception {
+
+        ChargeResponse created = chargeService.create(
+            new CreateChargeRequest(
+                new BigDecimal("149.90"),
+                "Charge to cancel through API"
+            )
+        );
+
+        mockMvc.perform(post("/api/v1/charges/{id}/cancel", created.id()))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.status").value("CANCELLED"));
+
+        mockMvc.perform(get("/api/v1/charges/{id}", created.id()))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.status").value("CANCELLED"));
+    }
+
+    @Test
+    void shouldExpirePendingChargeThroughApi() throws Exception {
+
+        ChargeResponse created = chargeService.create(
+            new CreateChargeRequest(
+                new BigDecimal("149.90"),
+                "Charge to expire through API"
+            )
+        );
+
+        mockMvc.perform(post("/api/v1/charges/{id}/expire", created.id()))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.status").value("EXPIRED"));
+
+        mockMvc.perform(get("/api/v1/charges/{id}", created.id()))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.status").value("EXPIRED"));
     }
 }
