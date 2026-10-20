@@ -40,4 +40,22 @@ public class ChargeController {
 
         return ResponseEntity.ok(chargeService.findById(id));
     }
+
+    @PostMapping("/{id}/pay")
+    public ResponseEntity<ChargeResponse> markAsPaid(@PathVariable UUID id) {
+
+        return ResponseEntity.ok(chargeService.markAsPaid(id));
+    }
+
+    @PostMapping("/{id}/cancel")
+    public ResponseEntity<ChargeResponse> cancel(@PathVariable UUID id) {
+
+        return ResponseEntity.ok(chargeService.cancel(id));
+    }
+
+    @PostMapping("/{id}/expire")
+    public ResponseEntity<ChargeResponse> expire(@PathVariable UUID id) {
+
+        return ResponseEntity.ok(chargeService.expire(id));
+    }
 }

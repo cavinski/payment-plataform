@@ -13,6 +13,8 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.UUID;
 
+import com.caio.paymentplatform.charge.exceptions.ChargeStateTransitionException;
+
 @Entity 
 @Table(name = "charges")
 public class Charge {
@@ -62,6 +64,26 @@ public class Charge {
 
     public static Charge create(BigDecimal amount, String description) {
         return new Charge(UUID.randomUUID(), amount, description);
+    }
+
+    public void markAsPaid() {
+        transitionTo(ChargeStatus.PAID);
+    }
+
+    public void cancel() {
+        transitionTo(ChargeStatus.CANCELLED);
+    }
+
+    public void expire() {
+        transitionTo(ChargeStatus.EXPIRED);
+    }
+
+    private void transitionTo(ChargeStatus newStatus) {
+        if (this.status != ChargeStatus.PENDING) {
+            throw new ChargeStateTransitionException(this.status);
+        }
+        
+        this.status = newStatus;
     }
 
     @PrePersist 

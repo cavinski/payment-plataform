@@ -31,9 +31,35 @@ public class ChargeService {
     @Transactional(readOnly = true)
     public ChargeResponse findById(UUID id) {
 
-        Charge charge = chargeRepository.findById(id)
-            .orElseThrow(() -> new ChargeNotFoundException(id));
+        return ChargeResponse.from(findCharge(id));
+    }
 
-        return ChargeResponse.from(charge);
+    @Transactional public ChargeResponse markAsPaid(UUID id) {
+
+        Charge charge = findCharge(id);
+        charge.markAsPaid();
+
+        return ChargeResponse.from(chargeRepository.save(charge));
+    }
+
+    @Transactional public ChargeResponse cancel(UUID id) {
+
+        Charge charge = findCharge(id);
+        charge.cancel();
+
+        return ChargeResponse.from(chargeRepository.save(charge));
+    }
+
+    @Transactional public ChargeResponse expire(UUID id) {
+
+        Charge charge = findCharge(id);
+        charge.expire();
+
+        return ChargeResponse.from(chargeRepository.save(charge));
+    }
+
+    private Charge findCharge(UUID id) {
+        return chargeRepository.findById(id)
+            .orElseThrow(() -> new ChargeNotFoundException(id));
     }
 }
