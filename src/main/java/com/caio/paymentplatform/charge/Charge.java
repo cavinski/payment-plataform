@@ -8,12 +8,11 @@ import jakarta.persistence.Id;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
-
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.UUID;
-
 import com.caio.paymentplatform.charge.exceptions.ChargeStateTransitionException;
+import jakarta.persistence.Version;
 
 @Entity 
 @Table(name = "charges")
@@ -21,6 +20,10 @@ public class Charge {
     
     @Id 
     private UUID id;
+
+    @Version 
+    @Column(nullable = false)
+    private Long version;
 
     @Column(nullable = false, precision = 19, scale = 2)
     private BigDecimal amount;
