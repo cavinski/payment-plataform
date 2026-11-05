@@ -4,7 +4,6 @@ import com.caio.paymentplatform.charge.dto.ChargeResponse;
 import com.caio.paymentplatform.charge.dto.CreateChargeRequest;
 import com.caio.paymentplatform.charge.exceptions.ChargeNotFoundException;
 import com.caio.paymentplatform.charge.exceptions.ChargeStateTransitionException;
-
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -12,9 +11,19 @@ import org.springframework.boot.testcontainers.service.connection.ServiceConnect
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
-
 import java.math.BigDecimal;
 import java.util.UUID;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.OptimisticLockException;
+import org.hibernate.StaleStateException;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -31,6 +40,12 @@ class ChargeServiceIntegrationTests {
 
     @Autowired 
     private ChargeRepository chargeRepository;
+
+    @Autowired 
+    private PlatformTransactionManager transactionManager;
+
+    @Autowired 
+    private EntityManager entityManager;
 
     @Test
     void shouldCreateAndRetrieveCharge() {
@@ -175,5 +190,145 @@ class ChargeServiceIntegrationTests {
             ChargeNotFoundException.class,
             () -> chargeService.markAsPaid(unknownId)
         );
+    }
+
+    @Test
+    void shouldAllowOnlyOneConcurrentChargeTransition() throws Exception {
+
+        ChargeResponse created = chargeService.create(
+            new CreateChargeRequest(
+                new BigDecimal("149.90"),
+                "Concurrent charge transition"
+            )
+        );
+
+        CountDownLatch bothTransactionsLoaded = new CountDownLatch(2);
+        CountDownLatch allowUpdates = new CountDownLatch(1);
+
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+
+        try {
+
+            Future<Throwable> payment = executor.submit(() ->
+                attemptTransition(
+                    created.id(),
+                    true,
+                    bothTransactionsLoaded,
+                    allowUpdates
+                )
+            );
+
+            Future<Throwable> cancellation = executor.submit(() ->
+                attemptTransition(
+                    created.id(),
+                    false,
+                    bothTransactionsLoaded,
+                    allowUpdates
+                )
+            );
+
+            assertTrue(
+                bothTransactionsLoaded.await(10, TimeUnit.SECONDS),
+                "Both transactions should load the charge"
+            );
+
+            allowUpdates.countDown();
+
+            Throwable paymentFailure = payment.get(10, TimeUnit.SECONDS);
+            Throwable cancellationFailure = cancellation.get(10, TimeUnit.SECONDS);
+
+            boolean paymentSucceeded = paymentFailure == null;
+            boolean cancellationSucceeded = cancellationFailure == null;
+
+            assertTrue(
+                paymentSucceeded ^ cancellationSucceeded,
+                "Exactly one transition should succeed"
+            );
+
+            Throwable losingFailure = paymentSucceeded
+                ? cancellationFailure
+                : paymentFailure;
+
+            assertTrue(isOptimisticLockFailure(losingFailure),
+                () -> "Expected an optimistic locking failure, but got: " + losingFailure);
+
+            ChargeResponse finalCharge = chargeService.findById(created.id());
+
+            assertTrue(finalCharge.status() == ChargeStatus.PAID
+                    || finalCharge.status() == ChargeStatus.CANCELLED);
+
+        } finally {
+            allowUpdates.countDown();
+            executor.shutdownNow();
+        }
+    }
+
+    private Throwable attemptTransition(
+        
+            UUID chargeId,
+            boolean markAsPaid,
+            CountDownLatch bothTransactionsLoaded,
+            CountDownLatch allowUpdates) {
+
+        TransactionTemplate transaction = new TransactionTemplate(transactionManager);
+
+        try {
+
+            transaction.executeWithoutResult(transactionStatus -> {
+
+                Charge charge = chargeRepository.findById(chargeId).orElseThrow();
+
+                bothTransactionsLoaded.countDown();
+                await(allowUpdates);
+
+                if (markAsPaid) {
+                    charge.markAsPaid();
+                } else {
+                    charge.cancel();
+                }
+
+                entityManager.flush();
+            });
+
+            return null;
+
+        } catch (RuntimeException exception) {
+            return exception;
+        }
+    }
+
+    private void await(CountDownLatch latch) {
+
+        try {
+
+            if (!latch.await(10, TimeUnit.SECONDS)) {
+                throw new IllegalStateException("Timed out waiting for concurrent transactions");
+            }
+            
+        } catch (InterruptedException exception) {
+
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(
+                "Interrupted while waiting for concurrent transactions",exception
+            );
+        }
+    }
+
+    private boolean isOptimisticLockFailure(Throwable exception) {
+
+        Throwable current = exception;
+
+        while (current != null) {
+            
+            if (current instanceof ObjectOptimisticLockingFailureException
+                    || current instanceof OptimisticLockException
+                    || current instanceof StaleStateException) {
+                return true;
+            }
+
+            current = current.getCause();
+        }
+
+        return false;
     }
 }
