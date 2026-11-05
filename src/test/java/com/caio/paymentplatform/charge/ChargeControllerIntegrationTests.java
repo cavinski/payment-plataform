@@ -9,7 +9,7 @@ import org.springframework.boot.testcontainers.service.connection.ServiceConnect
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.testcontainers.junit.jupiter.Testcontainers;
-import org.testcontainers.shaded.com.fasterxml.jackson.databind.json.JsonMapper;
+import tools.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
 import java.util.UUID;
 import com.caio.paymentplatform.charge.dto.ChargeResponse;
@@ -17,6 +17,7 @@ import com.caio.paymentplatform.charge.dto.CreateChargeRequest;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.containers.PostgreSQLContainer;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
@@ -36,6 +37,9 @@ class ChargeControllerIntegrationTests {
 
     @Autowired
     private ChargeService chargeService;
+
+    @Autowired 
+    private ObjectMapper objectMapper;
 
     @Container
     @ServiceConnection
@@ -89,7 +93,7 @@ class ChargeControllerIntegrationTests {
             .getResponse()
             .getContentAsString();
 
-        String id = JsonMapper.builder().build().readTree(response).get("id").asText();
+        String id = objectMapper.readTree(response).get("id").asText();
 
         mockMvc.perform(get("/api/v1/charges/{id}", id))
             .andExpect(status().isOk())
@@ -181,7 +185,8 @@ class ChargeControllerIntegrationTests {
             )
         );
 
-        mockMvc.perform(post("/api/v1/charges/{id}/pay", created.id()))
+        mockMvc.perform(post("/api/v1/charges/{id}/pay", created.id())
+            .header("Idempotency-Key", "test-payment-001"))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.id").value(created.id().toString()))
             .andExpect(jsonPath("$.status").value("PAID"));
@@ -201,7 +206,7 @@ class ChargeControllerIntegrationTests {
             )
         );
 
-        chargeService.markAsPaid(created.id());
+        chargeService.markAsPaid(created.id(), "test-payment-" + UUID.randomUUID());
 
         mockMvc.perform(post("/api/v1/charges/{id}/cancel", created.id()))
             .andExpect(status().isConflict())
@@ -218,7 +223,8 @@ class ChargeControllerIntegrationTests {
         
         UUID unknownId = UUID.randomUUID();
 
-        mockMvc.perform(post("/api/v1/charges/{id}/pay", unknownId))
+        mockMvc.perform(post("/api/v1/charges/{id}/pay", unknownId)
+            .header("Idempotency-Key", "test-payment-nonexistent-001"))
             .andExpect(status().isNotFound())
             .andExpect(jsonPath("$.code").value("CHARGE_NOT_FOUND"));
     }
@@ -259,5 +265,62 @@ class ChargeControllerIntegrationTests {
         mockMvc.perform(get("/api/v1/charges/{id}", created.id()))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.status").value("EXPIRED"));
+    }
+
+    @Test
+    void shouldReturnOriginalResponseWhenPayingWithSameIdempotencyKey() throws Exception {
+
+        ChargeResponse created = chargeService.create(
+            new CreateChargeRequest(
+                new BigDecimal("149.90"),
+                "Idempotent payment test"
+            )
+        );
+
+        String idempotencyKey = "payment-retry-" + UUID.randomUUID();
+
+        String firstResponse = mockMvc.perform(post("/api/v1/charges/{id}/pay", created.id())
+            .header("Idempotency-Key", idempotencyKey))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.status").value("PAID"))
+            .andReturn()
+            .getResponse()
+            .getContentAsString();
+
+        String secondResponse = mockMvc.perform(post("/api/v1/charges/{id}/pay", created.id())
+            .header("Idempotency-Key", idempotencyKey))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.status").value("PAID"))
+            .andReturn()
+            .getResponse()
+            .getContentAsString();
+
+        assertEquals(firstResponse, secondResponse);
+    }
+
+    @Test
+    void shouldReturnConflictWhenReusingIdempotencyKeyForDifferentCharge() throws Exception {
+
+        ChargeResponse firstCharge = chargeService.create(
+            new CreateChargeRequest(new BigDecimal("100.00"), "First charge"));
+
+        ChargeResponse secondCharge = chargeService.create(
+            new CreateChargeRequest(new BigDecimal("200.00"), "Second charge"));
+
+        String idempotencyKey = "payment-conflict-" + UUID.randomUUID();
+
+        mockMvc.perform(post("/api/v1/charges/{id}/pay", firstCharge.id())
+            .header("Idempotency-Key", idempotencyKey))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.status").value("PAID"));
+
+        mockMvc.perform(post("/api/v1/charges/{id}/pay", secondCharge.id())
+            .header("Idempotency-Key", idempotencyKey))
+            .andExpect(status().isConflict())
+            .andExpect(jsonPath("$.code").value("IDEMPOTENCY_KEY_REUSED"));
+
+        mockMvc.perform(get("/api/v1/charges/{id}", secondCharge.id()))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.status").value("PENDING"));
     }
 }

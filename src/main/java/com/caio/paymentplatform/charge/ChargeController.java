@@ -5,9 +5,8 @@ import com.caio.paymentplatform.charge.dto.CreateChargeRequest;
 import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
-
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.servlet.support.ServletUriComponentsBuilder;
-
 import java.net.URI;
 import java.util.UUID;
 
@@ -42,9 +41,12 @@ public class ChargeController {
     }
 
     @PostMapping("/{id}/pay")
-    public ResponseEntity<ChargeResponse> markAsPaid(@PathVariable UUID id) {
+    public ResponseEntity<ChargeResponse> markAsPaid(
+        @PathVariable UUID id, 
+        @RequestHeader("Idempotency-Key") String idempotencyKey
+    ) {
 
-        return ResponseEntity.ok(chargeService.markAsPaid(id));
+        return ResponseEntity.ok(chargeService.markAsPaid(id, idempotencyKey));
     }
 
     @PostMapping("/{id}/cancel")

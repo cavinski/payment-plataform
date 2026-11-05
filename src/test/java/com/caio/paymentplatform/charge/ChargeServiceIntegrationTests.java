@@ -118,7 +118,9 @@ class ChargeServiceIntegrationTests {
             )
         );
 
-        ChargeResponse paid = chargeService.markAsPaid(created.id());
+        ChargeResponse paid = chargeService.markAsPaid(
+            created.id(), "test-payment-" + UUID.randomUUID());
+
         ChargeResponse retrieved = chargeService.findById(created.id());
 
         assertEquals(ChargeStatus.PAID, paid.status());
@@ -169,7 +171,7 @@ class ChargeServiceIntegrationTests {
             )
         );
 
-        chargeService.markAsPaid(created.id());
+        chargeService.markAsPaid(created.id(), "test-payment-" + UUID.randomUUID());
 
         assertThrows(
             ChargeStateTransitionException.class,
@@ -188,7 +190,7 @@ class ChargeServiceIntegrationTests {
 
         assertThrows(
             ChargeNotFoundException.class,
-            () -> chargeService.markAsPaid(unknownId)
+            () -> chargeService.markAsPaid(unknownId, "test-payment-" + UUID.randomUUID())
         );
     }
 

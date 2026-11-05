@@ -3,7 +3,10 @@ package com.caio.paymentplatform.charge;
 import com.caio.paymentplatform.charge.dto.ChargeResponse;
 import com.caio.paymentplatform.charge.dto.CreateChargeRequest;
 import com.caio.paymentplatform.charge.exceptions.ChargeNotFoundException;
-
+import com.caio.paymentplatform.charge.idempotency.IdempotencyRecord;
+import com.caio.paymentplatform.charge.idempotency.IdempotencyService;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -14,8 +17,17 @@ public class ChargeService {
     
     private final ChargeRepository chargeRepository;
 
-    public ChargeService(ChargeRepository chargeRepository) {
+    private final IdempotencyService idempotencyService;
+
+    private final ObjectMapper objectMapper;
+
+    public ChargeService(ChargeRepository chargeRepository, 
+        IdempotencyService idempotencyService, 
+        ObjectMapper objectMapper) {
+
         this.chargeRepository = chargeRepository;
+        this.idempotencyService = idempotencyService;
+        this.objectMapper = objectMapper;
     }
 
     @Transactional 
@@ -34,12 +46,38 @@ public class ChargeService {
         return ChargeResponse.from(findCharge(id));
     }
 
-    @Transactional public ChargeResponse markAsPaid(UUID id) {
+    @Transactional public ChargeResponse markAsPaid(UUID id, String idempotencyKey) {
+
+        String requestHash = idempotencyService.generateRequestHash(
+            "POST",
+            "/api/v1/charges/" + id + "/pay"
+        );
+
+        IdempotencyRecord record = idempotencyService.registerOrRetrieve(idempotencyKey, requestHash);
+
+        if (record.isCompleted()) {
+            try {
+                return objectMapper.readValue(record.getResponseBody(), ChargeResponse.class);
+            } catch (JacksonException execption) {
+                throw new IllegalStateException("Could not deserialize stored idempotency response", execption);
+            }
+        }
 
         Charge charge = findCharge(id);
         charge.markAsPaid();
 
-        return ChargeResponse.from(chargeRepository.save(charge));
+        ChargeResponse response = ChargeResponse.from(chargeRepository.save(charge));
+
+        try {
+            String responseBody = objectMapper.writeValueAsString(response);
+
+            record.complete(200, responseBody);
+
+        } catch (JacksonException exception) {
+            throw new IllegalStateException("Could not serialize idempotency response", exception);
+        }
+
+        return response;
     }
 
     @Transactional public ChargeResponse cancel(UUID id) {

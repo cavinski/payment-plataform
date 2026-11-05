@@ -7,6 +7,8 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import com.caio.paymentplatform.charge.exceptions.ChargeNotFoundException;
 import com.caio.paymentplatform.charge.exceptions.ChargeStateTransitionException;
+import com.caio.paymentplatform.charge.idempotency.IdempotencyKeyConflictException;
+
 import java.util.Map;
 
 @RestControllerAdvice 
@@ -33,6 +35,14 @@ public class ChargeExceptionHandler {
         return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of(
             "code", "CONCURRENT_CHARGE_MODIFICATION",
             "message", "The charge was modified by another operation. Retry if appropriate."
+        ));
+    }
+
+    @ExceptionHandler(IdempotencyKeyConflictException.class)
+    public ResponseEntity<Map<String, String>> handleIdempotencyKeyConflict(IdempotencyKeyConflictException exception) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of(
+            "code", "IDEMPOTENCY_KEY_REUSED",
+            "message", exception.getMessage()
         ));
     }
 }
