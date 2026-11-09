@@ -5,29 +5,33 @@ import com.caio.paymentplatform.charge.dto.CreateChargeRequest;
 import com.caio.paymentplatform.charge.exceptions.ChargeNotFoundException;
 import com.caio.paymentplatform.charge.idempotency.IdempotencyRecord;
 import com.caio.paymentplatform.charge.idempotency.IdempotencyService;
+import com.caio.paymentplatform.charge.outbox.OutboxService;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-
+import com.caio.paymentplatform.charge.events.ChargePaidEvent;
 import java.util.UUID;
 
 @Service 
 public class ChargeService {
     
     private final ChargeRepository chargeRepository;
-
     private final IdempotencyService idempotencyService;
-
     private final ObjectMapper objectMapper;
+    private final OutboxService outboxService;
 
-    public ChargeService(ChargeRepository chargeRepository, 
+    public ChargeService(
+        ChargeRepository chargeRepository, 
         IdempotencyService idempotencyService, 
-        ObjectMapper objectMapper) {
+        ObjectMapper objectMapper,
+        OutboxService outboxService
+    ) {
 
         this.chargeRepository = chargeRepository;
         this.idempotencyService = idempotencyService;
         this.objectMapper = objectMapper;
+        this.outboxService = outboxService;
     }
 
     @Transactional 
@@ -67,6 +71,9 @@ public class ChargeService {
         charge.markAsPaid();
 
         ChargeResponse response = ChargeResponse.from(chargeRepository.save(charge));
+
+        ChargePaidEvent event = ChargePaidEvent.from(charge);
+        outboxService.save(event);
 
         try {
             String responseBody = objectMapper.writeValueAsString(response);

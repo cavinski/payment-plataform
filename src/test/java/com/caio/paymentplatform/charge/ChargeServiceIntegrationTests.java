@@ -4,6 +4,8 @@ import com.caio.paymentplatform.charge.dto.ChargeResponse;
 import com.caio.paymentplatform.charge.dto.CreateChargeRequest;
 import com.caio.paymentplatform.charge.exceptions.ChargeNotFoundException;
 import com.caio.paymentplatform.charge.exceptions.ChargeStateTransitionException;
+import com.caio.paymentplatform.charge.outbox.OutboxRepository;
+
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -24,9 +26,12 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import org.springframework.test.context.event.RecordApplicationEvents;
+import com.caio.paymentplatform.charge.events.ChargePaidEvent;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+@RecordApplicationEvents 
 @Testcontainers 
 @SpringBootTest 
 class ChargeServiceIntegrationTests {
@@ -46,6 +51,9 @@ class ChargeServiceIntegrationTests {
 
     @Autowired 
     private EntityManager entityManager;
+
+    @Autowired 
+    private OutboxRepository outboxRepository;
 
     @Test
     void shouldCreateAndRetrieveCharge() {
@@ -332,5 +340,37 @@ class ChargeServiceIntegrationTests {
         }
 
         return false;
+    }
+
+    @Test
+    void shouldPersistChargePaidEventOnlyOnceWhenPaymentIsRetried() {
+
+        ChargeResponse created = chargeService.create(
+            new CreateChargeRequest(
+                new BigDecimal("149.90"),
+                "Outbox event test"
+            )
+        );
+
+        String idempotencyKey = "payment-event-" + UUID.randomUUID();
+
+        ChargeResponse firstResponse = chargeService.markAsPaid(
+            created.id(), idempotencyKey
+        );
+
+        ChargeResponse secondResponse = chargeService.markAsPaid(
+            created.id(), idempotencyKey
+        );
+
+        assertEquals(firstResponse, secondResponse);
+
+        var events = outboxRepository.findAll()
+            .stream()
+            .filter(event -> event.getAggregateId().equals(created.id()))
+            .toList();
+
+        assertEquals(1, events.size());
+        assertEquals("ChargePaidEvent", events.getFirst().getEventType());
+        assertFalse(events.getFirst().isProcessed());
     }
 }
