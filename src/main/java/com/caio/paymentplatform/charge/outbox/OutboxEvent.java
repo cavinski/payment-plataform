@@ -36,6 +36,15 @@ public class OutboxEvent {
     @Column(nullable = false)
     private int attempts;
 
+    @Column(name = "next_attempt_at", nullable = false)
+    private Instant nextAttemptAt;
+
+    @Column(name = "last_error", columnDefinition = "text")
+    private String lastError;
+
+    @Column(name = "failed_at")
+    private Instant failedAt;
+
     protected OutboxEvent() {
     }
 
@@ -46,6 +55,7 @@ public class OutboxEvent {
         this.payload = payload;;
         this.createdAt = Instant.now();
         this.attempts = 0;
+        this.nextAttemptAt = Instant.now();
     }
 
     public static OutboxEvent create(UUID aggregateId, String eventType, String payload) {
@@ -58,6 +68,19 @@ public class OutboxEvent {
         }
 
         this.processedAt = Instant.now();
+    }
+
+    public void registerFailure(String error, Instant nextAttemptAt, int maxAttempts) {
+
+        this.attempts++;
+        this.lastError = error;
+
+        if (this.attempts >= maxAttempts) {
+            this.failedAt = Instant.now();
+            return;
+        }
+
+        this.nextAttemptAt = nextAttemptAt;
     }
 
     public void incrementAttempts() {
@@ -88,7 +111,27 @@ public class OutboxEvent {
         return attempts;
     }
 
+    public UUID getId() {
+        return id;
+    }
+
     public boolean isProcessed() {
         return processedAt != null;
+    }
+
+    public Instant getNextAttemptAt() {
+        return nextAttemptAt;
+    }
+
+    public String getLastError() {
+        return lastError;
+    }
+
+    public Instant getFailedAt() {
+        return failedAt;
+    }
+
+    public boolean isFailed() {
+        return failedAt != null;
     }
 }

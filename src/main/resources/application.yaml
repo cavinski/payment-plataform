@@ -15,3 +15,7 @@ spring:
 
   flyway:
     enabled: true
+
+outbox:
+  worker:
+    fixed-delay: 1000
